@@ -108,61 +108,124 @@ def badge_html(text: str, kind: str):
     </div>
     """
 
-
 def format_event_label(ev):
-    # 時間がある場合はつける
+    # 「10:00-12:00 タイトル」という形式にする
     if ev["start"] and ev["end"]:
-        t = f'{ev["start"]}-{ev["end"]} '
-    else:
-        t = ""
-    # place（店名など）があれば先頭に
-    p = f'{ev["place"]} ' if ev["place"] else ""
-    return f"{p}{t}{ev['title']}"
+        return f'{ev["start"]}-{ev["end"]} {ev["title"]}'
+    # 終日の場合はタイトルだけ
+    return ev['title']
+
 
 @st.dialog("予定を追加")
 def show_add_event_dialog(selected_date):
     st.write(f"📅 **{selected_date}** の予定を入力してください")
 
-    all_day = st.checkbox("終日（時間なし）", value=True, key="dialog_all_day")
+    # フォームの外で状態を管理する
+    all_day = st.checkbox("終日", value=False, key="dialog_all_day")
 
-    with st.form("dialog_add"):
+    with st.form("dialog_add", clear_on_submit=True): # clear_on_submitを追加すると入力がリセットされる
         category_ui = st.selectbox(
             "種別",
             ["class（授業）", "job（就活）", "private（遊び）", "work（確定バイト）", "proposal（提案シフト）"],
             key="dialog_cat"
         )
         cat_map = {
-            "class（授業）": "class",
-            "job（就活）": "job",
-            "private（遊び）": "private",
-            "work（確定バイト）": "work",
-            "proposal（提案シフト）": "proposal"
+            "class（授業）": "class", "job（就活）": "job", "private（遊び）": "private",
+            "work（確定バイト）": "work", "proposal（提案シフト）": "proposal"
         }
 
-        
         start_time = end_time = None
         if not all_day:
             col1, col2 = st.columns(2)
-            start_time = col1.time_input("開始", value=datetime.strptime("10:00", "%H:%M").time(), key="dialog_st").strftime("%H:%M")
-            end_time = col2.time_input("終了", value=datetime.strptime("12:00", "%H:%M").time(), key="dialog_et").strftime("%H:%M")
+            # time_inputの戻り値を直接取得するように修正
+            st_val = col1.time_input("開始", value=datetime.strptime("10:00", "%H:%M").time(), key="dialog_st")
+            et_val = col2.time_input("終了", value=datetime.strptime("12:00", "%H:%M").time(), key="dialog_et")
+            start_time = st_val.strftime("%H:%M")
+            end_time = et_val.strftime("%H:%M")
 
         title = st.text_input("タイトル", placeholder="例：サンマルク", key="dialog_title")
-        place = st.text_input("場所・店名（任意）", key="dialog_place")
+        place = st.text_input("場所・店名", key="dialog_place")
 
         submitted = st.form_submit_button("保存する", use_container_width=True)
 
-    if submitted:
-        if not title.strip():
-            st.error("タイトルを入力してください")
-        else:
-            add_event(selected_date, start_time, end_time, cat_map[category_ui], title.strip(), place.strip() or None)
-            st.success("保存しました ✅")
-            st.rerun()
-
+        if submitted:
+            if not title.strip():
+                st.error("タイトルを入力してください")
+            else:
+                # DB追加処理
+                add_event(
+                    selected_date,
+                    start_time,
+                    end_time,
+                    cat_map[category_ui],
+                    title.strip(),
+                    place.strip() or None,
+                )
+                
+                # ★ 重要：ダイアログを閉じるためのフラグ管理
+                st.session_state["skip_next_dateclick"] = True
+                # st.rerun() を呼ぶことでダイアログが閉じ、メイン画面が更新される
+                st.rerun()
 
 # ---------- main ----------
 st.set_page_config(page_title="バイトシフト作成", layout="wide")
+
+st.markdown("""
+<style>
+/* === Dot（左の青い●）を消す === */
+.fc .fc-daygrid-event-dot,
+.fc-daygrid-event-dot,
+.fc-event-dot {
+  display: none !important;
+}
+
+/* dotイベントのインデント（点の分の左余白）を消す */
+.fc .fc-daygrid-dot-event .fc-event-title,
+.fc .fc-daygrid-dot-event .fc-event-time {
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+}
+
+/* テーマによっては擬似要素で点を描くので保険 */
+.fc .fc-daygrid-dot-event::before,
+.fc .fc-daygrid-dot-event .fc-event-main::before {
+  content: none !important;
+  display: none !important;
+}
+
+/* 背景・枠線を消す（文字だけにする） */
+.fc .fc-daygrid-block-event,
+.fc .fc-daygrid-dot-event,
+.fc .fc-timeline-event,
+.fc .fc-x-event {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* 文字の見た目 */
+.fc .fc-event-main {
+  color: #333 !important;
+  font-weight: bold;
+}
+.fc .fc-event-title {
+  white-space: normal !important;
+  overflow-wrap: break-word !important;
+  display: block !important;
+  line-height: 1.2 !important;
+}
+
+/* hoverの背景（必要なら残す） */
+.fc .fc-daygrid-event:hover {
+  background: #f0f0f0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 init_db()
+
+
 
 st.title("📅 バイトシフト作成アプリ")
 
@@ -173,47 +236,7 @@ year = c1.number_input("年", 2020, 2035, today.year, 1)
 month = c2.selectbox("月", list(range(1, 13)), index=today.month - 1)
 
 
-# サイドバー：予定追加
-st.sidebar.header("➕ 予定を追加")
-category = st.sidebar.selectbox(
-    "種別",
-    ["class（授業）", "job（就活）", "private（遊び）", "work（確定バイト）", "proposal（提案シフト）"],
-)
-cat_map = {
-    "class（授業）": "class",
-    "job（就活）": "job",
-    "private（遊び）": "private",
-    "work（確定バイト）": "work",
-    "proposal（提案シフト）": "proposal",
-}
-cat = cat_map[category]
 
-ev_date = st.sidebar.date_input("日付", value=today)
-all_day = st.sidebar.checkbox("終日（時間なし）", value=True)
-
-start_time = None
-end_time = None
-if not all_day:
-    start_time = st.sidebar.time_input("開始", value=datetime.strptime("10:00", "%H:%M").time()).strftime("%H:%M")
-    end_time = st.sidebar.time_input("終了", value=datetime.strptime("12:00", "%H:%M").time()).strftime("%H:%M")
-
-title = st.sidebar.text_input("タイトル", value="例：研究演習 / 面接 / サンマルク")
-place = st.sidebar.text_input("場所・店名（任意）", value="")
-
-if st.sidebar.button("追加"):
-    if title.strip() == "":
-        st.sidebar.error("タイトルを入力してね")
-    else:
-        add_event(
-            ev_date.strftime("%Y-%m-%d"),
-            start_time,
-            end_time,
-            cat,
-            title.strip(),
-            place.strip() if place.strip() else None,
-        )
-        st.sidebar.success("追加しました ✅")
-        st.rerun()
 
 # DBから月内イベント取得
 events_by_date = fetch_events_in_month(year, month)
@@ -245,23 +268,29 @@ calendar_options = {
     "height": 650, 
     "initialDate": f"{year}-{month:02d}-01", # 年月選択に追従  # ← マスクリック
     "timeZone": "Asia/Tokyo", 
-}
+    "displayEventTime": False,  # 標準の時間表示（左側のドット横の文字）を隠す
+    "dayMaxEvents": True,
+    "eventDisplay": "block",
 
+}
 
 state = st_calendar(
     events=fc_events,
     options=calendar_options,
-    callbacks=["dateClick", "eventClick"],    # クリックを拾う
-    key=f"calendar_{year}_{month}",           # key重複回避
+    callbacks=["dateClick", "eventClick"],
+    key=f"calendar_{year}_{month}",
 )
 
-if state and state.get("callback") == "dateClick":
-    clicked_date = state["dateClick"].get("dateStr")  # 例: "2026-01-13"
-    if clicked_date:
-        clicked_date = clicked_date[:10]
-    else:
-        clicked_date = state["dateClick"]["date"].split("T")[0]  # 保険
-    show_add_event_dialog(clicked_date)
+# ★ 保存後のrerunで残るdateClickを1回だけ捨てる
+if st.session_state.get("skip_next_dateclick", False):
+    st.session_state["skip_next_dateclick"] = False
+else:
+    if state and state.get("dateClick"):
+        dc = state["dateClick"]
+        clicked_date = (dc.get("dateStr") or dc["date"])[:10]
+        show_add_event_dialog(clicked_date)
+
+
 
 
 # 下：一覧＆削除（デバッグ・操作用）
@@ -274,7 +303,7 @@ for d, evs in events_by_date.items():
         flat.append(ev)
 
 if not flat:
-    st.info("この月の予定はまだありません。左のサイドバーから追加してね。")
+    st.info("この月の予定はまだありません。予定を追加してね")
 else:
     for ev in flat:
         cols = st.columns([5, 1])
